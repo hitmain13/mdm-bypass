@@ -54,38 +54,36 @@ case "$ACTION" in
   status)
     echo "=== profiles status -type enrollment ==="
     profiles status -type enrollment 2>&1 || true
-    found="/var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound"
-    if [[ -f "$found" ]]; then
-      echo "Cloud Config DEP: presente (.cloudConfigRecordFound)"
-    else
-      echo "Cloud Config DEP: ausente"
-    fi
+    found=0
+    for f in /var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound /Volumes/*/private/var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound /Volumes/*/var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound; do
+      [[ -f "$f" ]] || continue
+      echo "Cloud Config DEP: presente em $f"
+      found=1
+    done
+    [[ "$found" -eq 0 ]] && echo "Cloud Config DEP: ausente"
     ;;
   clear-nag)
     run_clear_nag
     ;;
   recovery-clear)
-    tmp="$(mktemp)"
-    fetch scripts/clear-dep-nag-recovery.sh "$tmp"
-    fetch scripts/lib/common.sh "${tmp}.common"
-    # recovery script sources lib relative to scripts/ — patch: run from temp dir layout
     work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
     mkdir -p "${work}/scripts/lib"
-    mv "$tmp" "${work}/scripts/clear-dep-nag-recovery.sh"
-    mv "${tmp}.common" "${work}/scripts/lib/common.sh"
+    fetch scripts/clear-dep-nag-recovery.sh "${work}/scripts/clear-dep-nag-recovery.sh"
+    fetch scripts/lib/common.sh "${work}/scripts/lib/common.sh"
     chmod +x "${work}/scripts/clear-dep-nag-recovery.sh"
     if [[ "$(id -u)" -ne 0 ]]; then
-      echo "Erro: recovery-clear exige root (Terminal do Recovery). Não use sudo." >&2
-      rm -rf "$work"
+      echo "Erro: recovery-clear exige root. Não use sudo." >&2
       exit 1
     fi
     bash "${work}/scripts/clear-dep-nag-recovery.sh"
-    rm -rf "$work"
     ;;
   recovery-assafdori)
-    curl -fsSL https://raw.githubusercontent.com/assafdori/bypass-mdm/main/bypass-mdm-v2.sh -o /tmp/bypass-mdm-assaf.sh
-    chmod +x /tmp/bypass-mdm-assaf.sh
-    sh /tmp/bypass-mdm-assaf.sh
+    tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' EXIT
+    curl -fsSL --proto '=https' https://raw.githubusercontent.com/assafdori/bypass-mdm/main/bypass-mdm-v2.sh -o "$tmp"
+    chmod +x "$tmp"
+    bash "$tmp"
     ;;
   *)
     echo "Uso: install | status | clear-nag | recovery-clear | recovery-assafdori"

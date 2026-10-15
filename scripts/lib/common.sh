@@ -19,6 +19,34 @@ mdm_bypass_load_block_domains() {
   done <"$extra"
 }
 
+# Volume de dados do macOS instalado (não Recovery/Preboot/Update).
+mdm_bypass_skip_volume() {
+  local base
+  base="$(basename "$1")"
+  case "$base" in
+    *Recovery*|*Preboot*|*Update*|VM|Hardware|xarts|iSCPreboot) return 0 ;;
+  esac
+  return 1
+}
+
+# Settings + hosts do MESMO volume (private/etc/hosts).
+mdm_bypass_hosts_for_settings() {
+  local settings="$1" vol
+  vol="${settings%/var/db/ConfigurationProfiles/Settings}"
+  vol="${vol%/private}"
+  if [[ -f "${vol}/private/etc/hosts" ]]; then
+    echo "${vol}/private/etc/hosts"
+  elif [[ -f "${vol}/etc/hosts" ]]; then
+    echo "${vol}/etc/hosts"
+  fi
+}
+
+mdm_bypass_block_domain() {
+  local file="$1" domain="$2"
+  grep -Fqx "0.0.0.0 ${domain}" "$file" 2>/dev/null && return 0
+  echo "0.0.0.0 ${domain}" >>"$file"
+}
+
 # Recovery: já é root e não há sudo. macOS normal: sudo se existir.
 mdm_bypass_run_elevated() {
   if [[ "$(id -u)" -eq 0 ]]; then

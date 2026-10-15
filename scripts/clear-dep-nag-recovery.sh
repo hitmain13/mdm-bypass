@@ -1,5 +1,5 @@
 #!/bin/bash
-# Limpeza DEP/Cloud Config no Modo de Recuperação (sem sudo).
+# Limpeza DEP no Recovery. Sem sudo. Um par Settings+hosts por volume.
 
 set -euo pipefail
 
@@ -7,110 +7,92 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-RED='\033[1;31m'
-GRN='\033[1;32m'
-YEL='\033[1;33m'
-BLU='\033[1;34m'
-NC='\033[0m'
-
-info() { printf '%b\n' "${BLU}ℹ $*${NC}"; }
-ok() { printf '%b\n' "${GRN}✓ $*${NC}"; }
-warn() { printf '%b\n' "${YEL}⚠ $*${NC}"; }
-err() { printf '%b\n' "${RED}✗ $*${NC}" >&2; }
-
-find_settings_dirs() {
-  local vol
-  for vol in /Volumes/*; do
-    [[ -d "$vol" ]] || continue
-    [[ "$vol" == *Recovery* ]] && continue
-    if [[ -d "$vol/var/db/ConfigurationProfiles/Settings" ]]; then
-      echo "$vol/var/db/ConfigurationProfiles/Settings"
-    fi
-    if [[ -d "$vol/private/var/db/ConfigurationProfiles/Settings" ]]; then
-      echo "$vol/private/var/db/ConfigurationProfiles/Settings"
-    fi
-  done
-}
-
-# Preferir volume de dados gravável (evita etc/hosts no sistema selado).
-find_hosts_file() {
-  local vol h
-  for vol in /Volumes/*; do
-    [[ -d "$vol" ]] || continue
-    [[ "$vol" == *Recovery* ]] && continue
-    [[ "$vol" == *" - Data"* ]] || [[ "$(basename "$vol")" == "Data" ]] || continue
-    for h in "$vol/private/etc/hosts" "$vol/etc/hosts"; do
-      if [[ -f "$h" ]] && [[ -w "$h" ]]; then
-        echo "$h"
-        return 0
-      fi
-    done
-  done
-  for vol in /Volumes/*; do
-    for h in "$vol/private/etc/hosts" "$vol/etc/hosts"; do
-      [[ -f "$h" ]] && [[ -w "$h" ]] && echo "$h" && return 0
-    done
-  done
-  return 1
-}
+info() { printf '\033[1;34mℹ %s\033[0m\n' "$*"; }
+ok() { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
+err() { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; }
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  err "Execute como root (Terminal do Recovery). Não use sudo — no Recovery ele costuma não existir."
+  err "Terminal do Recovery já é root. Não use sudo."
   exit 1
 fi
 
 mdm_bypass_load_block_domains "$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 SETTINGS_DIRS=()
-while IFS= read -r _line; do
-  [[ -n "$_line" ]] && SETTINGS_DIRS+=("$_line")
-done < <(find_settings_dirs | sort -u)
+for vol in /Volumes/*; do
+  [[ -d "$vol" ]] || continue
+  mdm_bypass_skip_volume "$vol" && continue
+  for s in "$vol/private/var/db/ConfigurationProfiles/Settings" "$vol/var/db/ConfigurationProfiles/Settings"; do
+    [[ -d "$s" ]] || continue
+    # Ignora symlink que sai do volume.
+    case "$(cd "$s" && pwd -P)" in
+      "$vol"/*) SETTINGS_DIRS+=("$(cd "$s" && pwd -P)") ;;
+    esac
+  done
+done
+
+# Únicos.
+uniq=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && uniq+=("$line")
+done < <(printf '%s\n' "${SETTINGS_DIRS[@]}" | sort -u)
+SETTINGS_DIRS=("${uniq[@]}")
 
 if [[ "${#SETTINGS_DIRS[@]}" -eq 0 ]]; then
-  err "Nenhum .../ConfigurationProfiles/Settings em /Volumes/*"
-  err "Monte o disco (Utilitário de Disco) e rode: ls /Volumes"
+  err "Nenhum Settings em /Volumes. Monte o disco e rode: ls /Volumes"
   exit 1
 fi
 
+info "Volumes com Settings: ${#SETTINGS_DIRS[@]}"
+failed=0
+stamp="$(date +%Y%m%d-%H%M%S)"
+
 for SETTINGS_DIR in "${SETTINGS_DIRS[@]}"; do
-  info "Processando: ${SETTINGS_DIR}"
+  info "Settings: ${SETTINGS_DIR}"
+  vol="${SETTINGS_DIR%/private/var/db/ConfigurationProfiles/Settings}"
+  vol="${vol%/var/db/ConfigurationProfiles/Settings}"
+  backup="${vol}/private/var/tmp/mdm-bypass-backup-${stamp}"
+  mkdir -p "$backup" || { err "Sem pasta de backup em ${vol}"; failed=1; continue; }
+  copied=0
+  for f in "$SETTINGS_DIR"/* "$SETTINGS_DIR"/.[!.]*; do
+    [[ -f "$f" ]] || continue
+    cp -X "$f" "$backup/$(basename "$f")" 2>/dev/null && copied=$((copied + 1)) || true
+  done
+  [[ "$copied" -gt 0 ]] && ok "Backup: ${backup} (${copied} arquivos)" || warn "Backup vazio em ${backup}"
+
   rm -f \
     "$SETTINGS_DIR/.cloudConfigHasActivationRecord" \
     "$SETTINGS_DIR/.cloudConfigRecordFound" \
     "$SETTINGS_DIR/.cloudConfigTimerCheck" \
     "$SETTINGS_DIR/com.apple.mdm.depnag.plist" \
     "$SETTINGS_DIR/com.apple.mdm.prelogin.plist" \
-    && ok "Registros DEP removidos." || warn "Falha parcial em ${SETTINGS_DIR}"
+    || { err "Falha ao remover em ${SETTINGS_DIR}"; failed=1; }
 
-  touch \
-    "$SETTINGS_DIR/.cloudConfigProfileInstalled" \
-    "$SETTINGS_DIR/.cloudConfigRecordNotFound" \
-    && ok "Marcadores de bypass criados." || warn "Falha ao criar marcadores."
-done
+  touch "$SETTINGS_DIR/.cloudConfigProfileInstalled" "$SETTINGS_DIR/.cloudConfigRecordNotFound" \
+    || warn "Marcadores não criados em ${SETTINGS_DIR}"
 
-HOSTS_FILE="$(find_hosts_file || true)"
-if [[ -n "${HOSTS_FILE:-}" ]]; then
-  info "Atualizando hosts (gravável): ${HOSTS_FILE}"
-  for domain in "${BLOCK_DOMAINS[@]}"; do
-    grep -qE "[[:space:]]${domain}([[:space:]]|$)" "$HOSTS_FILE" 2>/dev/null || \
-      echo "0.0.0.0 ${domain}" >>"$HOSTS_FILE" || warn "Não foi possível bloquear ${domain}"
-  done
-  ok "Hosts atualizados (quando o volume permitiu escrita)."
-else
-  warn "Nenhum etc/hosts gravável encontrado — a remoção dos arquivos DEP é o passo principal."
-fi
+  hosts="$(mdm_bypass_hosts_for_settings "$SETTINGS_DIR" || true)"
+  if [[ -n "${hosts:-}" && -w "$hosts" ]]; then
+    info "hosts: ${hosts}"
+    for domain in "${BLOCK_DOMAINS[@]}"; do
+      mdm_bypass_block_domain "$hosts" "$domain" || { err "Falha hosts ${domain}"; failed=1; }
+    done
+  else
+    warn "hosts do volume não gravável (${hosts:-ausente})"
+  fi
 
-failed=0
-for SETTINGS_DIR in "${SETTINGS_DIRS[@]}"; do
   if [[ -f "$SETTINGS_DIR/.cloudConfigRecordFound" ]]; then
-    err "Cloud config ainda presente em: ${SETTINGS_DIR}"
+    err "Ainda existe .cloudConfigRecordFound em ${SETTINGS_DIR}"
     failed=1
+  else
+    ok "Cloud config ausente em ${SETTINGS_DIR}"
   fi
 done
 
-echo ""
+sync || true
 if [[ "$failed" -ne 0 ]]; then
-  err "Limpeza incompleta. Verifique volumes com: ls /Volumes"
+  err "Limpeza incompleta."
   exit 1
 fi
-ok "Limpeza no Recovery concluída. Reinicie o Mac."
+ok "Concluído. Reinicie o Mac."

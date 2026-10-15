@@ -24,8 +24,13 @@ ok() { log "${GRN}✓ $*${NC}"; }
 warn() { log "${YEL}⚠ $*${NC}"; }
 err() { log "${RED}✗ $*${NC}" >&2; }
 
+if [[ -d /System/Installation ]]; then
+  err "Isto é o Recovery. Não use clear-nag. Rode recovery-clear (sem sudo)."
+  exit 2
+fi
+
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  err "Execute como root ou: sudo $0 (sudo não existe no Recovery — use recovery-clear)."
+  err "Execute como root ou: sudo $0 (no Recovery não existe sudo — use recovery-clear)."
   exit 1
 fi
 
@@ -82,9 +87,7 @@ mdm_bypass_load_block_domains "$REPO_ROOT"
 info "Bloqueando domínios no ${HOSTS_FILE}..."
 [[ -f "$HOSTS_FILE" ]] || touch "$HOSTS_FILE"
 for domain in "${BLOCK_DOMAINS[@]}"; do
-  if ! grep -qE "[[:space:]]${domain}([[:space:]]|$)" "$HOSTS_FILE" 2>/dev/null; then
-    echo "0.0.0.0 ${domain}" >>"$HOSTS_FILE" && ok "Bloqueado: ${domain}" || warn "Falha: ${domain}"
-  fi
+  mdm_bypass_block_domain "$HOSTS_FILE" "$domain" && ok "Bloqueado: ${domain}" || warn "Falha: ${domain}"
 done
 
 launchctl kickstart -k system/com.apple.remotemanagementd 2>/dev/null || true
