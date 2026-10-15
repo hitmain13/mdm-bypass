@@ -1,185 +1,156 @@
 # mdm-bypass
 
-Ferramentas e documentação para **diagnosticar** e **reduzir o nag de inscrição DEP/MDM** no macOS (modal *“Registre no Gerenciamento Remoto”* nos Ajustes), complementando o fluxo do [assafdori/bypass-mdm](https://github.com/assafdori/bypass-mdm) no **Modo de Recuperação**.
+Ferramentas para **diagnosticar** e **tratar o nag de inscrição DEP/MDM** no macOS (modal *Registre no Gerenciamento Remoto* nos Ajustes), em conjunto com o fluxo do [assafdori/bypass-mdm](https://github.com/assafdori/bypass-mdm) no **Modo de Recuperação**.
 
-Repositório: **https://github.com/hitmain13/mdm-bypass**
-
----
-
-## Diagnóstico verificado (ambiente de referência)
-
-Valores coletados em **14 out. 2026** no Mac usado no desenvolvimento deste projeto:
-
-| Item | Valor verificado |
-|------|------------------|
-| macOS | **15.7.4** (build **24G517**) |
-| SIP | **enabled** (`csrutil status`) |
-| `profiles status -type enrollment` | **Enrolled via DEP: No** · **MDM enrollment: No** |
-| Sintoma | Modal nos Ajustes pedindo registro remoto |
-| Organização (cloud config) | **Experian** |
-| URL de inscrição | `https://experian.jamfcloud.com/cloudenroll` |
-| Inscrição obrigatória no perfil | **true** (`IsMandatory`) |
-| Diretório crítico | `/var/db/ConfigurationProfiles/Settings` |
-| Flag dos arquivos | **`restricted`** (`ls -lO`) |
-| Efeito da flag | `sudo rm` → **Operation not permitted** com o sistema ligado |
-| `/etc/hosts` (bloqueios MDM) | Nenhuma entrada até rodar `--clear-nag` com sucesso na etapa de hosts |
-| Backup gerado pelo script | `~/Documents/mdm-bypass-backups/Settings-20261014-210617/` |
-
-Arquivos presentes em `Settings` no momento da verificação:
-
-- `.cloudConfigHasActivationRecord`
-- `.cloudConfigRecordFound` (contém o perfil Jamf/Experian)
-- `.cloudConfigTimerCheck`
-- `.deviceConfigurationBits`
-- `com.apple.mdm.depnag.plist` (histórico do nag nos Ajustes)
-- `com.apple.mdm.prelogin.plist`
-
-**Conclusão:** o Mac **não está inscrito no MDM**, mas o **DEP cloud config** ainda está no disco; o sistema exibe o aviso até esses arquivos serem removidos — no **macOS 15+ com SIP**, isso exige em geral o **Modo de Recuperação**.
+Repositório: https://github.com/hitmain13/mdm-bypass
 
 ---
 
-## Estrutura do repositório
+## Por que `sudo: command not found` no Recovery?
+
+No **Modo de Recuperação**, o Terminal costuma rodar como **root** e **não inclui** o comando `sudo`. Qualquer fluxo que chame `sudo` vai falhar.
+
+| Ambiente | Comando correto |
+|----------|-----------------|
+| **Recovery** | `curl ... \| bash -s -- recovery-clear` (sem sudo) |
+| **macOS instalado** | `bypass-mdm --clear-nag` (usa `sudo` **se existir**) |
+
+---
+
+## Sintomas típicos (genérico)
+
+- `profiles status -type enrollment` → **MDM enrollment: No** (ainda sem inscrição completa).
+- Arquivos em `/var/db/ConfigurationProfiles/Settings` com flag **`restricted`** (`ls -lO`).
+- Com SIP ativo, `rm` nesses arquivos no sistema ligado → **Operation not permitted**.
+- Modal nos **Ajustes** pedindo **Gerenciamento remoto**.
+
+**Conclusão usual:** cloud config DEP no disco, sem MDM ativo — no macOS 15+ a remoção dos arquivos `restricted` em geral exige **Recovery**.
+
+---
+
+## Estrutura
 
 ```text
 mdm-bypass/
 ├── README.md
-├── install.sh                 # instalação local + ~/.zshrc
-├── remote-bootstrap.sh        # instalação/execução remota (curl | bash)
-├── bin/
-│   └── bypass-mdm             # CLI (zsh)
-├── lib/
-│   └── bypass-mdm.zsh         # função bypass-mdm
+├── install.sh
+├── remote-bootstrap.sh
+├── bin/bypass-mdm
+├── lib/bypass-mdm.zsh
 ├── scripts/
-│   ├── clear-dep-nag.sh       # macOS instalado (sudo)
-│   └── clear-dep-nag-recovery.sh  # só Recovery
+│   ├── clear-dep-nag.sh
+│   ├── clear-dep-nag-recovery.sh
+│   └── lib/common.sh
 └── config/
-    └── extra-hosts.example    # domínios extras → extra-hosts.txt
+    └── extra-hosts.example   → copiar para extra-hosts.txt
 ```
-
-Após `install.sh`, links simbólicos em `~/.local/bin/` apontam para `scripts/` e `bin/`.
 
 ---
 
 ## Instalação local
 
 ```bash
-cd ~/Documents/Projects/mdm-bypass
-chmod +x install.sh remote-bootstrap.sh bin/bypass-mdm scripts/*.sh
+git clone https://github.com/hitmain13/mdm-bypass.git
+cd mdm-bypass
+chmod +x install.sh remote-bootstrap.sh bin/bypass-mdm scripts/*.sh scripts/lib/*.sh
 ./install.sh
 source ~/.zshrc
 bypass-mdm --status
 ```
 
----
-
-## Execução remota (estilo assafdori)
-
-Sem clonar o repositório — útil no **Recovery** (Wi‑Fi + Terminal):
+## Instalação remota (macOS normal)
 
 ```bash
-# Instalar no home e configurar shell
-curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- install
+```
 
-# Diagnóstico
-curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- status
+---
 
-# Limpar nag com macOS instalado (sudo; pode não remover arquivos restricted)
-curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- clear-nag
+## Recovery (recomendado para arquivos `restricted`)
 
-# Limpar DEP no Recovery (recomendado no macOS 15+)
+Wi‑Fi → **Utilitários → Terminal** → cole **sem sudo**:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- recovery-clear
-
-# Fluxo completo assafdori v2 (usuário temporário + bypass na instalação)
-curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- recovery-assafdori
 ```
 
-Equivalente direto ao upstream (só Recovery / tela MDM na instalação):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/assafdori/bypass-mdm/main/bypass-mdm-v2.sh -o bypass-mdm.sh && chmod +x bypass-mdm.sh && ./bypass-mdm.sh
-```
-
-No menu assafdori: **1) Bypass MDM from Recovery** · usuário/senha padrão: **Apple** / **1234**.
-
----
-
-## Fluxo recomendado (ordem)
-
-### A. Instalação nova ou tela de MDM no assistente
-
-Siga o [README do assafdori](https://github.com/assafdori/bypass-mdm) como etapas prévias:
-
-1. Apagar o disco (recomendado) e reinstalar macOS se possível.
-2. Na tela de **inscrição MDM**, desligar o Mac.
-3. **Modo de Recuperação** → Wi‑Fi → **Utilitários → Terminal**.
-4. Executar **bypass-mdm-v2** (comando acima ou `bypass-mdm` após bootstrap).
-5. Reiniciar, entrar com usuário temporário, criar conta admin, remover usuário temporário.
-
-### B. macOS já instalado — aviso nos Ajustes (caso Experian verificado)
-
-1. `bypass-mdm --clear-nag`  
-   - Faz backup em `~/Documents/mdm-bypass-backups/`.  
-   - No **15.7.4 + restricted**, a remoção dos arquivos em `Settings` **é ignorada**; hosts e serviços ainda podem ser atualizados.
-2. Se `--status` ainda mostrar `.cloudConfigRecordFound` → **Recovery obrigatório**:
-
-```bash
-# No Terminal do Recovery (ajuste o caminho após ls /Volumes)
-sh "/Volumes/Data - Data/Users/SEU_USUARIO/Documents/Projects/mdm-bypass/scripts/clear-dep-nag-recovery.sh"
-```
-
-Neste hardware, `diskutil list` mostra volumes APFS **Data** e **Data - Data**; no Recovery os nomes em `/Volumes` podem diferir — use `ls /Volumes` antes de colar o caminho.
-
-3. Reiniciar e confirmar:
+Reinicie o Mac e verifique:
 
 ```bash
 bypass-mdm --status
 ```
 
-Esperado: **sem** `.cloudConfigRecordFound` e **MDM enrollment: No**.
+Esperado: **sem** `.cloudConfigRecordFound`.
 
 ---
 
-## Comandos da CLI
+## macOS já instalado
 
-| Comando | Onde | Função |
-|---------|------|--------|
-| `bypass-mdm` | Recovery (ideal) | Baixa e executa **assafdori v2** |
-| `bypass-mdm --legacy` | Recovery | assafdori v1 |
-| `bypass-mdm --clear-nag` | macOS instalado | Backup + hosts + limpeza se não `restricted` |
-| `bypass-mdm --clear-nag-recovery` | Recovery | `clear-dep-nag-recovery.sh` |
-| `bypass-mdm --status` | Qualquer | `profiles` + cloud config local |
+```bash
+bypass-mdm --clear-nag
+```
+
+Faz backup em `~/Documents/mdm-bypass-backups/`. Se os arquivos forem `restricted`, o script orienta o **recovery-clear**.
 
 ---
 
-## Domínios bloqueados em `/etc/hosts`
+## Instalação nova / tela MDM (assafdori)
 
-Padrão nos scripts:
+1. [README assafdori](https://github.com/assafdori/bypass-mdm): apagar disco (recomendado), Recovery, Wi‑Fi.
+2. No Recovery:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/assafdori/bypass-mdm/main/bypass-mdm-v2.sh -o bypass-mdm.sh && chmod +x bypass-mdm.sh && ./bypass-mdm.sh
+```
+
+Opção **1) Bypass MDM from Recovery** · usuário/senha padrão: **Apple** / **1234**.
+
+Ou:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- recovery-assafdori
+```
+
+---
+
+## Domínios bloqueados (padrão)
 
 - `deviceenrollment.apple.com`
 - `mdmenrollment.apple.com`
 - `iprofiles.apple.com`
-- `experian.jamfcloud.com`
 
-Copie `config/extra-hosts.example` → `config/extra-hosts.txt` para adicionar domínios (ex.: outro tenant Jamf).
+Domínios do seu servidor MDM (ex.: `*.jamfcloud.com`): adicione em `config/extra-hosts.txt` (veja `extra-hosts.example`).
 
 ---
 
-## Limitações (verificadas)
+## CLI
 
-- O **serial** pode continuar listado no **Apple Business Manager** da organização; estes scripts atuam no **estado local** e na **tentativa de inscrição**.
-- **Não clique em “Registrar”** nos Ajustes se o objetivo é evitar MDM ativo (lock/wipe/políticas remotas).
-- Após **atualizações major** do macOS, rode `bypass-mdm --status` de novo; o cloud config pode ser recriado.
-- Restaurar backup manual (se necessário): arquivos em `~/Documents/mdm-bypass-backups/Settings-*`.
+| Comando | Onde |
+|---------|------|
+| `bypass-mdm` | Recovery → assafdori v2 |
+| `bypass-mdm --clear-nag` | macOS instalado (`sudo` se houver) |
+| `bypass-mdm --clear-nag-recovery` | Recovery, já como root |
+| `bypass-mdm --status` | Diagnóstico |
+
+No Recovery, `bypass-mdm` do shell **não carrega** sozinho — use **remote-bootstrap** ou `sh` no script em disco montado (`ls /Volumes`).
+
+---
+
+## Limitações
+
+- Não remove o serial do **Apple Business Manager** da organização.
+- Não clique em **Registrar** nos Ajustes se quiser evitar MDM ativo.
+- `curl \| bash` executa código remoto — use apenas se confiar na origem.
 
 ---
 
 ## Aviso legal
 
-Use apenas em equipamentos que você possui ou com autorização explícita. O bypass impede a configuração local do MDM; não remove o aparelho do inventário corporativo. Consulte as políticas da sua organização.
+Use somente em dispositivos de sua propriedade ou com **autorização escrita** do responsável pelo parque. Burlar MDM corporativo pode violar políticas internas e leis aplicáveis.
 
 ---
 
 ## Créditos
 
-- Bypass na instalação: [assafdori/bypass-mdm](https://github.com/assafdori/bypass-mdm) (MIT).
-- Este repositório: scripts de diagnóstico, limpeza DEP nos Ajustes, Recovery e bootstrap remoto.
+- [assafdori/bypass-mdm](https://github.com/assafdori/bypass-mdm) (MIT)
+- Revisão de scripts: `docs/REVIEW.md` (Grok 4.7)

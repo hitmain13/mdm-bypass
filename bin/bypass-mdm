@@ -1,4 +1,12 @@
 #!/usr/bin/env zsh
-export MDM_BYPASS_HOME="${MDM_BYPASS_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
+_resolve_mdm_bypass_home() {
+  local src="${(%):-%x}"
+  while [[ -L "$src" ]]; do
+    src="$(readlink "$src")"
+    [[ "$src" != /* ]] && src="${0:h}/$src"
+  done
+  echo "$(cd "$(dirname "$src")/.." && pwd)"
+}
+export MDM_BYPASS_HOME="${MDM_BYPASS_HOME:-$(_resolve_mdm_bypass_home)}"
 source "${MDM_BYPASS_HOME}/lib/bypass-mdm.zsh"
 bypass-mdm "$@"

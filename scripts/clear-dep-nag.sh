@@ -1,6 +1,6 @@
 #!/bin/bash
 # Remove estado DEP/Cloud Config local (aviso nos Ajustes).
-# macOS 15+: arquivos com flag "restricted" só podem ser alterados no Modo de Recuperação.
+# macOS 15+: flag "restricted" → use Recovery (recovery-clear).
 
 set -euo pipefail
 
@@ -8,7 +8,9 @@ SETTINGS_DIR="/var/db/ConfigurationProfiles/Settings"
 HOSTS_FILE="/etc/hosts"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RECOVERY_SCRIPT="${SCRIPT_DIR}/clear-dep-nag-recovery.sh"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
 
 RED='\033[1;31m'
 GRN='\033[1;32m'
@@ -23,19 +25,16 @@ warn() { log "${YEL}⚠ $*${NC}"; }
 err() { log "${RED}✗ $*${NC}" >&2; }
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  err "Execute com privilégios de administrador: sudo $0"
+  err "Execute como root ou: sudo $0 (sudo não existe no Recovery — use recovery-clear)."
   exit 1
 fi
 
-if [[ ! -d "$SETTINGS_DIR" ]]; then
-  err "Diretório não encontrado: $SETTINGS_DIR"
-  exit 1
-fi
+[[ -d "$SETTINGS_DIR" ]] || { err "Diretório não encontrado: $SETTINGS_DIR"; exit 1; }
 
 settings_protected=0
-if ls -lO "$SETTINGS_DIR" 2>/dev/null | grep -q restricted; then
+if ls -laO "$SETTINGS_DIR" 2>/dev/null | grep -q restricted; then
   settings_protected=1
-  warn "Arquivos DEP com flag 'restricted' + SIP ativo: não é possível apagar com o macOS ligado."
+  warn "Arquivos com flag 'restricted': remoção local ignorada; use Modo de Recuperação."
 fi
 
 if [[ -n "${SUDO_USER:-}" ]]; then
@@ -61,67 +60,41 @@ backup_settings() {
 }
 
 info "Criando backup em ${BACKUP_DIR}..."
-if backup_settings "$SETTINGS_DIR" "$BACKUP_DIR"; then
-  ok "Backup criado (${BACKUP_DIR})."
-else
-  warn "Backup parcial — continuando."
-fi
+backup_settings "$SETTINGS_DIR" "$BACKUP_DIR" && ok "Backup criado." || warn "Backup parcial."
 
 if [[ "$settings_protected" -eq 0 ]]; then
   info "Removendo registros de Cloud Config / DEP..."
-  rm -f \
+  if ! rm -f \
     "$SETTINGS_DIR/.cloudConfigHasActivationRecord" \
     "$SETTINGS_DIR/.cloudConfigRecordFound" \
     "$SETTINGS_DIR/.cloudConfigTimerCheck" \
     "$SETTINGS_DIR/com.apple.mdm.depnag.plist" \
-    "$SETTINGS_DIR/com.apple.mdm.prelogin.plist"
+    "$SETTINGS_DIR/com.apple.mdm.prelogin.plist"; then
+    warn "Falha ao remover arquivos — use recovery-clear no Modo de Recuperação."
+  fi
   touch \
     "$SETTINGS_DIR/.cloudConfigProfileInstalled" \
     "$SETTINGS_DIR/.cloudConfigRecordNotFound" 2>/dev/null || true
-else
-  info "Pulando remoção local (protegido). Use Modo de Recuperação."
 fi
 
-declare -a BLOCK_DOMAINS=(
-  deviceenrollment.apple.com
-  mdmenrollment.apple.com
-  iprofiles.apple.com
-  experian.jamfcloud.com
-)
+mdm_bypass_load_block_domains "$REPO_ROOT"
 
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-EXTRA_HOSTS="${REPO_ROOT}/config/extra-hosts.txt"
-if [[ -f "$EXTRA_HOSTS" ]]; then
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    line="$(echo "$line" | xargs)"
-    [[ -n "$line" ]] && BLOCK_DOMAINS+=("$line")
-  done <"$EXTRA_HOSTS"
-fi
-
-info "Bloqueando domínios de inscrição no ${HOSTS_FILE}..."
+info "Bloqueando domínios no ${HOSTS_FILE}..."
 [[ -f "$HOSTS_FILE" ]] || touch "$HOSTS_FILE"
 for domain in "${BLOCK_DOMAINS[@]}"; do
   if ! grep -qE "[[:space:]]${domain}([[:space:]]|$)" "$HOSTS_FILE" 2>/dev/null; then
-    echo "0.0.0.0 ${domain}" >>"$HOSTS_FILE" && ok "Bloqueado: ${domain}" || warn "Falha ao bloquear ${domain}"
+    echo "0.0.0.0 ${domain}" >>"$HOSTS_FILE" && ok "Bloqueado: ${domain}" || warn "Falha: ${domain}"
   fi
 done
 
 launchctl kickstart -k system/com.apple.remotemanagementd 2>/dev/null || true
-killall "System Settings" 2>/dev/null || killall "Ajustes do Sistema" 2>/dev/null || true
+killall "System Settings" 2>/dev/null || true
 
 echo ""
 if [[ -f "$SETTINGS_DIR/.cloudConfigRecordFound" ]]; then
-  err "Cloud config DEP ainda presente — o aviso nos Ajustes deve continuar."
-  echo ""
-  info "Próximo passo (obrigatório no macOS 15+ com SIP):"
-  echo "  1. Modo de Recuperação > Wi‑Fi > Utilitários > Terminal"
-  echo "  2. Execute (ajuste o volume com: ls /Volumes):"
-  echo ""
-  echo "     curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- recovery-clear"
-  echo ""
-  echo "  Ou, com o disco de dados montado:"
-  echo "     sh \"/Volumes/<SEU-DISCO-DE-DADOS>/Users/$(logname 2>/dev/null || echo macbook)/Documents/Projects/mdm-bypass/scripts/clear-dep-nag-recovery.sh\""
+  err "Cloud config DEP ainda presente."
+  info "No Recovery (sem sudo), execute:"
+  echo "  curl -fsSL https://raw.githubusercontent.com/hitmain13/mdm-bypass/main/remote-bootstrap.sh | bash -s -- recovery-clear"
   exit 2
 fi
 

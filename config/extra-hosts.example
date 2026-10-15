@@ -1,3 +1,2 @@
-# Copie para extra-hosts.txt (um domínio por linha).
-# experian.jamfcloud.com já está na lista padrão dos scripts.
-# outro-tenant.jamfcloud.com
+# Copie para extra-hosts.txt — um domínio de inscrição MDM/Jamf por linha.
+# Exemplo: tenant.jamfcloud.com

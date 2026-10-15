@@ -1,6 +1,4 @@
 # shellcheck shell=bash
-# Função bypass-mdm — carregada por bin/bypass-mdm ou install.sh
-
 : "${MDM_BYPASS_HOME:=${HOME}/Documents/Projects/mdm-bypass}"
 
 _bypass_mdm_repo_base='https://raw.githubusercontent.com/assafdori/bypass-mdm/main'
@@ -17,10 +15,23 @@ _bypass_mdm_log() {
   esac
 }
 
-_bypass_mdm_in_recovery() {
-  if [[ "$(id -u)" -eq 0 ]] && [[ ! -d "${HOME}/Library/Application Support" ]]; then
-    return 0
+_bypass_mdm_run_elevated() {
+  local clear_script="$1"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$clear_script"
+    return $?
   fi
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$clear_script"
+    return $?
+  fi
+  _bypass_mdm_log err "sudo não encontrado. No Recovery use: bash -s -- recovery-clear (via remote-bootstrap)."
+  return 127
+}
+
+_bypass_mdm_in_recovery() {
+  [[ -d "/Volumes" ]] && [[ "$(id -u)" -eq 0 ]] && [[ ! -f /var/db/.AppleSetupDone ]] && return 0
+  [[ "$(id -u)" -eq 0 ]] && [[ ! -d "${HOME}/Library/Application Support" ]] && return 0
   return 1
 }
 
@@ -40,12 +51,12 @@ bypass-mdm() {
     case "$1" in
       -h|--help)
         cat <<EOF
-bypass-mdm — MDM/DEP para macOS (${MDM_BYPASS_HOME})
+bypass-mdm — MDM/DEP para macOS
 
   bypass-mdm                      Recovery: assafdori bypass-mdm-v2
   bypass-mdm --legacy             assafdori v1
-  bypass-mdm --clear-nag          macOS instalado (sudo); hosts + limpeza se permitido
-  bypass-mdm --clear-nag-recovery Terminal do Modo de Recuperação
+  bypass-mdm --clear-nag          macOS instalado (requer sudo se disponível)
+  bypass-mdm --clear-nag-recovery Modo de Recuperação (root, sem sudo)
   bypass-mdm --status             Diagnóstico local
   bypass-mdm --help
 
@@ -56,13 +67,16 @@ EOF
       --legacy|-l) use_legacy=1; shift ;;
       --clear-nag|--fix-settings)
         [[ -x "$clear_script" ]] || { _bypass_mdm_log err "Não encontrado: $clear_script"; return 1; }
-        _bypass_mdm_log info "Limpeza DEP (sudo)..."
-        sudo "$clear_script"
+        _bypass_mdm_run_elevated "$clear_script"
         return $?
         ;;
       --clear-nag-recovery)
         [[ -f "$rec_script" ]] || { _bypass_mdm_log err "Não encontrado: $rec_script"; return 1; }
-        sudo sh "$rec_script"
+        if [[ "$(id -u)" -ne 0 ]]; then
+          _bypass_mdm_log err "No Recovery o Terminal já é root. Não use sudo."
+          return 1
+        fi
+        bash "$rec_script"
         return $?
         ;;
       --status)
@@ -71,24 +85,20 @@ EOF
         echo ""
         local found="/var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound"
         if [[ -f "$found" ]]; then
-          _bypass_mdm_log warn "Cloud Config DEP presente."
-          local org_name
-          org_name="$(plutil -extract CloudConfigProfile.OrganizationName raw "$found" 2>/dev/null)" && \
-            _bypass_mdm_log info "Organização: ${org_name}"
+          _bypass_mdm_log warn "Cloud Config DEP presente (.cloudConfigRecordFound)."
         else
           _bypass_mdm_log ok "Sem .cloudConfigRecordFound."
         fi
         return 0
         ;;
-      *)
-        _bypass_mdm_log err "Opção desconhecida: $1"; return 1 ;;
+      *) _bypass_mdm_log err "Opção desconhecida: $1"; return 1 ;;
     esac
   done
 
   script_url="$([[ "$use_legacy" == 1 ]] && echo "$_bypass_mdm_script_v1" || echo "$_bypass_mdm_script_v2")"
   _bypass_mdm_in_recovery || {
     _bypass_mdm_log warn "Fora do Recovery — fluxo pensado para instalação/MDM no Recovery."
-    read -r -p 'Continuar? [s/N] ' confirm
+    read -r '?Continuar? [s/N] ' confirm
     case "$confirm" in s|S|sim|Sim|SIM) ;; *) return 1 ;; esac
   }
   _bypass_mdm_preflight || return 1

@@ -8,6 +8,7 @@ MARKER="# mdm-bypass (github.com/hitmain13/mdm-bypass)"
 chmod +x "${REPO_ROOT}/bin/bypass-mdm" \
   "${REPO_ROOT}/scripts/clear-dep-nag.sh" \
   "${REPO_ROOT}/scripts/clear-dep-nag-recovery.sh" \
+  "${REPO_ROOT}/scripts/lib/common.sh" \
   "${REPO_ROOT}/remote-bootstrap.sh" 2>/dev/null || true
 
 mkdir -p "${HOME}/.local/bin"
