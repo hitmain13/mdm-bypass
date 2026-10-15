@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+export MDM_BYPASS_HOME="${MDM_BYPASS_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
+source "${MDM_BYPASS_HOME}/lib/bypass-mdm.zsh"
+bypass-mdm "$@"
